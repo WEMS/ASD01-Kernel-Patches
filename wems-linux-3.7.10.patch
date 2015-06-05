@@ -1,0 +1,1289 @@
+diff --git a/arch/arm/boot/compressed/Makefile b/arch/arm/boot/compressed/Makefile
+index a517153..2084b76 100644
+--- a/arch/arm/boot/compressed/Makefile
++++ b/arch/arm/boot/compressed/Makefile
+@@ -78,6 +78,10 @@ ifeq ($(CONFIG_ARCH_SHMOBILE),y)
+ OBJS		+= head-shmobile.o
+ endif
+ 
++ifeq ($(CONFIG_ARCH_WEMS_ASD01),y)
++OBJS		+= head-wems_asd01.o
++endif
++
+ #
+ # We now have a PIC decompressor implementation.  Decompressors running
+ # from RAM should not define ZTEXTADDR.  Decompressors running directly
+diff --git a/arch/arm/boot/compressed/head-wems_asd01.S b/arch/arm/boot/compressed/head-wems_asd01.S
+new file mode 100644
+index 0000000..46ff162
+--- /dev/null
++++ b/arch/arm/boot/compressed/head-wems_asd01.S
+@@ -0,0 +1,29 @@
++/* 
++ * linux/arch/arm/boot/compressed/head-wems_asd01.S
++ * 
++ * Copyright (C) 2013 Wireless Energy Management Systems International Ltd.
++ * Author: Guy Thouret <guythouret@wems.co.uk>
++ * 
++ * Some code borrowed from Nicolas Pitre's 'head-sa1100.S' file. This
++ * is merged with head.S by the linker.
++ */
++
++#include <linux/config.h>
++#include <asm/mach-types.h>
++
++        .section        ".start", "ax"
++
++__WEMS_ASD01_start:
++        b       4f
++
++1:      .word   MACH_TYPE_WEMS_LINUX	/* Machine type */
++2:      .word   0x10027000		/* PLL regs phys addr */
++3:      .word   0x2e000000		/* Value for PCCR1 - enable GPT clocks */
++
++4:
++        ldr     r1, 2b
++        ldr     r2, 3b
++        str     r2, [r1, #36]		/* Write to PCCR1 */
++
++        ldr     r7, 1b			/* Set machine type */
++
+diff --git a/arch/arm/mach-imx/Kconfig b/arch/arm/mach-imx/Kconfig
+index 8d27658..5cc6795 100644
+--- a/arch/arm/mach-imx/Kconfig
++++ b/arch/arm/mach-imx/Kconfig
+@@ -146,6 +146,19 @@ config MACH_MX21ADS
+ 	  Include support for MX21ADS platform. This includes specific
+ 	  configurations for the board and its peripherals.
+ 
++config MACH_WEMS_ASD01
++	bool "WEMS ASD01 platform"
++	select IMX_HAVE_PLATFORM_IMX_UART
++	select IMX_HAVE_PLATFORM_MXC_MMC
++	select IMX_HAVE_PLATFORM_MXC_NAND
++	select IMX_HAVE_PLATFORM_IMX2_WDT
++	select IMX_HAVE_PLATFORM_IMX21_HCD
++	select IMX_HAVE_PLATFORM_IMX_I2C
++	select IMX_HAVE_PLATFORM_IMX_SSI
++	select SOC_IMX21
++	help
++	  Include support for the ASD01 WEMSprogrammer
++
+ comment "MX25 platforms:"
+ 
+ config MACH_MX25_3DS
+diff --git a/arch/arm/mach-imx/Makefile b/arch/arm/mach-imx/Makefile
+index 895754a..f3fa18b 100644
+--- a/arch/arm/mach-imx/Makefile
++++ b/arch/arm/mach-imx/Makefile
+@@ -25,6 +25,7 @@ obj-$(CONFIG_MACH_APF9328) += mach-apf9328.o
+ 
+ # i.MX21 based machines
+ obj-$(CONFIG_MACH_MX21ADS) += mach-mx21ads.o
++obj-$(CONFIG_MACH_WEMS_ASD01) += mach-wems_asd01.o
+ 
+ # i.MX25 based machines
+ obj-$(CONFIG_MACH_MX25_3DS) += mach-mx25_3ds.o
+diff --git a/arch/arm/mach-imx/clk-imx21.c b/arch/arm/mach-imx/clk-imx21.c
+index cf65148..b3fa72d 100644
+--- a/arch/arm/mach-imx/clk-imx21.c
++++ b/arch/arm/mach-imx/clk-imx21.c
+@@ -176,10 +176,36 @@ int __init mx21_clocks_init(unsigned long lref, unsigned long href)
+ 	clk_register_clkdev(clk[csi_hclk_gate], "csi", NULL);
+ 	clk_register_clkdev(clk[ssi1_gate], "ssi1", NULL);
+ 	clk_register_clkdev(clk[ssi2_gate], "ssi2", NULL);
+-	clk_register_clkdev(clk[sdhc1_ipg_gate], "sdhc1", NULL);
+-	clk_register_clkdev(clk[sdhc2_ipg_gate], "sdhc2", NULL);
++	clk_register_clkdev(clk[sdhc1_ipg_gate], "ipg", "mxc-mmc.0");
++	clk_register_clkdev(clk[sdhc2_ipg_gate], "ipg", "mxc-mmc.1");
++	clk_register_clkdev(clk[per2], "per", "mxc-mmc.0");
++	clk_register_clkdev(clk[per2], "per", "mxc-mmc.1");
++	clk_register_clkdev(clk[hclk], "per", "imx21-hclk");
+ 
+ 	mxc_timer_init(MX21_IO_ADDRESS(MX21_GPT1_BASE_ADDR), MX21_INT_GPT1);
+ 
++	/* Get HCLK and set to 133MHz */
++	struct clk *clk_hclk;
++	clk_hclk = clk_get_sys("imx21-hclk","per");
++	printk("hclk = %lu\n",clk_get_rate(clk_hclk));
++
++	/* Max Power - Override the system bus to 133MHz, woah there! */
++	//__raw_writel(0x17030603,CCM_CSCR);
++	//printk("hclk = %lu\n",clk_get_rate(clk_hclk));
++
++	/* DEBUG: Print current values of clock registers */
++	printk("CSCR: 0x%08x\n",readl(CCM_CSCR));
++	printk("MPCTL0: 0x%08x\n",readl(CCM_MPCTL0));
++	printk("MPCTL1: 0x%08x\n",readl(CCM_MPCTL1));
++	printk("SPCTL0: 0x%08x\n",readl(CCM_SPCTL0));
++	printk("SPCTL1: 0x%08x\n",readl(CCM_SPCTL1));
++	printk("OSC26MCTL: 0x%08x\n",readl(CCM_OSC26MCTL));
++	printk("PCDR0: 0x%08x\n",readl(CCM_PCDR0));
++	printk("PCDR1: 0x%08x\n",readl(CCM_PCDR1));
++	printk("PCCR0: 0x%08x\n",readl(CCM_PCCR0));
++	printk("PCCR1: 0x%08x\n",readl(CCM_PCCR1));
++	printk("CCSR: 0x%08x\n",readl(CCM_CCSR));
++	printk("WKGDCTL: 0x%08x\n",readl(CCM_WKGDCTL));
++
+ 	return 0;
+ }
+diff --git a/arch/arm/mach-imx/mach-wems_asd01.c b/arch/arm/mach-imx/mach-wems_asd01.c
+new file mode 100644
+index 0000000..f9a147a
+--- /dev/null
++++ b/arch/arm/mach-imx/mach-wems_asd01.c
+@@ -0,0 +1,420 @@
++/*
++ * Copyright (c) 2012 Wireless Energy Management Systems International Ltd.
++ * Author: Guy Thouret <guythouret@wems.co.uk>
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ */
++
++#include <linux/platform_device.h>
++#include <linux/mtd/mtd.h>
++#include <linux/mtd/physmap.h>
++#include <linux/gpio.h>
++#include <mach/common.h>
++#include <mach/hardware.h>
++#include <asm/mach-types.h>
++#include <asm/mach/arch.h>
++#include <asm/mach/time.h>
++#include <asm/mach/map.h>
++#include <mach/iomux-mx21.h>
++
++#include "devices-imx21.h"
++
++/* Map Additional IO for RS232 Signalling
++ *	TX	->
++ *	RX	<-
++ *	RTS	->
++ *	CTS	<-
++ *	DTR	->
++ *	DSR	<-
++ *	DCD	<-
++ *	RI	<-
++ */
++#define WEMS_ASD01_UART2_DCD	(GPIO_PORTB | GPIO_GPIO | GPIO_IN | 19)
++#define WEMS_ASD01_UART2_RI		(GPIO_PORTB | GPIO_GPIO | GPIO_IN | 18)
++#define WEMS_ASD01_UART2_DSR	(GPIO_PORTB | GPIO_GPIO | GPIO_IN | 17)
++#define WEMS_ASD01_UART2_DTR	(GPIO_PORTB | GPIO_GPIO | GPIO_OUT | 14)
++#define WEMS_ASD01_UART2_CTS	(GPIO_PORTE | GPIO_GPIO | GPIO_IN | 3)
++#define WEMS_ASD01_UART2_RTS	(GPIO_PORTE | GPIO_GPIO | GPIO_OUT | 4)
++
++#define WEMS_ASD01_UART3_DCD	(GPIO_PORTB | GPIO_GPIO | GPIO_IN | 13)
++#define WEMS_ASD01_UART3_RI		(GPIO_PORTB | GPIO_GPIO | GPIO_IN | 12)
++#define WEMS_ASD01_UART3_DSR	(GPIO_PORTB | GPIO_GPIO | GPIO_IN | 11)
++#define WEMS_ASD01_UART3_DTR	(GPIO_PORTB | GPIO_GPIO | GPIO_OUT | 10)
++#define WEMS_ASD01_UART3_CTS	(GPIO_PORTE | GPIO_GPIO | GPIO_IN | 10)
++#define WEMS_ASD01_UART3_RTS	(GPIO_PORTE | GPIO_GPIO | GPIO_OUT | 11)
++
++/* Map Additional IO for SD */
++#define WEMS_ASD01_SD1_VEN		(GPIO_PORTD | GPIO_GPIO | GPIO_OUT | 27)
++#define WEMS_ASD01_SD1_WP		(GPIO_PORTD | GPIO_GPIO | GPIO_IN | 26)
++#define WEMS_ASD01_SD1_CD		(GPIO_PORTD | GPIO_GPIO | GPIO_IN | 25)
++
++/* Map Additional IO for USB */
++/* usb 1-1 */
++#define WEMS_ASD01_USB1_MODE		(GPIO_PORTC | GPIO_GPIO | GPIO_OUT | 6)
++#define WEMS_ASD01_USB1_SUSPEND		(GPIO_PORTC | GPIO_PF | GPIO_OUT | 7)
++#define WEMS_ASD01_USB1_FS			(GPIO_PORTC | GPIO_PF | GPIO_OUT | 8)
++#define WEMS_ASD01_USB1_OE			(GPIO_PORTC | GPIO_PF | GPIO_OUT | 9)
++#define WEMS_ASD01_USB1_TXDM		(GPIO_PORTC | GPIO_PF | GPIO_OUT | 10)
++#define WEMS_ASD01_USB1_TXDP		(GPIO_PORTC | GPIO_PF | GPIO_OUT | 11)
++#define WEMS_ASD01_USB1_RXDM		(GPIO_PORTC | GPIO_PF | GPIO_IN | 12)
++#define WEMS_ASD01_USB1_RXDP		(GPIO_PORTC | GPIO_PF | GPIO_IN | 13)
++
++/* usb 1-2 */
++#define WEMS_ASD01_USBH_MODE		(GPIO_PORTB | GPIO_GPIO | GPIO_OUT | 22)
++#define WEMS_ASD01_USBH_SUSPEND		(GPIO_PORTB | GPIO_PF | GPIO_OUT | 25)
++#define WEMS_ASD01_USBH_FS			(GPIO_PORTB | GPIO_PF | GPIO_OUT | 26)
++#define WEMS_ASD01_USBH_OE			(GPIO_PORTB | GPIO_PF | GPIO_OUT | 27)
++#define WEMS_ASD01_USBH_TXDM		(GPIO_PORTB | GPIO_PF | GPIO_OUT | 28)
++#define WEMS_ASD01_USBH_TXDP		(GPIO_PORTB | GPIO_PF | GPIO_OUT | 29)
++#define WEMS_ASD01_USBH_RXDM		(GPIO_PORTB | GPIO_PF | GPIO_IN | 30)
++#define WEMS_ASD01_USBH_RXDP		(GPIO_PORTB | GPIO_PF | GPIO_IN | 31)
++
++/* usb 1-3 */
++#define WEMS_ASD01_USBH1_MODE		(GPIO_PORTB | GPIO_GPIO | GPIO_OUT | 21)
++#define WEMS_ASD01_USBH1_FS			(GPIO_PORTD | GPIO_AIN | GPIO_OUT | 21)
++#define WEMS_ASD01_USBH1_OE			(GPIO_PORTD | GPIO_AIN | GPIO_OUT | 22)
++#define WEMS_ASD01_USBH1_TXDM		(GPIO_PORTD | GPIO_AIN | GPIO_OUT | 23)
++#define WEMS_ASD01_USBH1_TXDP		(GPIO_PORTD | GPIO_AIN | GPIO_OUT | 24)
++#define WEMS_ASD01_USBH1_RXDM		(GPIO_PORTD | GPIO_AOUT | GPIO_IN | 19)
++#define WEMS_ASD01_USBH1_RXDP		(GPIO_PORTD | GPIO_AOUT | GPIO_IN | 20)
++
++#define WEMS_ASD01_I2C_INT			(GPIO_PORTE | GPIO_GPIO | GPIO_IN | 0)
++
++/* Status LEDs */
++#define WEMS_ASD01_LED_FAULT		(GPIO_PORTC | GPIO_GPIO | GPIO_OUT | 14)
++#define WEMS_ASD01_LED_RF_RED		(GPIO_PORTC | GPIO_GPIO | GPIO_OUT | 15)
++#define WEMS_ASD01_LED_RF_GREEN		(GPIO_PORTC | GPIO_GPIO | GPIO_OUT | 16)
++#define WEMS_ASD01_LED_ALARM		(GPIO_PORTC | GPIO_GPIO | GPIO_OUT | 17)
++
++
++#define WEMS_ASD01_MMIO_BASE_ADDR   0xf5000000
++#define WEMS_ASD01_MMIO_SIZE        0x20
++
++
++static const int wems_asd01_pins[] __initconst = {
++	/* Ethernet - CS8900 IRQ */
++	(GPIO_PORTE | GPIO_GPIO | GPIO_IN | 2),
++
++	/* Console - UART1 */
++	PE12_PF_UART1_TXD,
++	PE13_PF_UART1_RXD,
++	
++	/* Serial1 - UART2 */
++	PE6_PF_UART2_TXD,
++	PE7_PF_UART2_RXD,
++	WEMS_ASD01_UART2_DCD,
++	WEMS_ASD01_UART2_RI,
++	WEMS_ASD01_UART2_DSR,
++	WEMS_ASD01_UART2_DTR,
++	WEMS_ASD01_UART2_CTS,
++	WEMS_ASD01_UART2_RTS,
++
++	/* Serial2 - UART3 */
++	PE8_PF_UART3_TXD,
++	PE9_PF_UART3_RXD,
++	WEMS_ASD01_UART3_DCD,
++	WEMS_ASD01_UART3_RI,
++	WEMS_ASD01_UART3_DSR,
++	WEMS_ASD01_UART3_DTR,
++	WEMS_ASD01_UART3_CTS,
++	WEMS_ASD01_UART3_RTS,
++
++	/* SD - SD1 */
++	PE18_PF_SD1_D0,
++	PE19_PF_SD1_D1,
++	PE20_PF_SD1_D2,
++	PE21_PF_SD1_D3,
++	PE22_PF_SD1_CMD,
++	PE23_PF_SD1_CLK,
++	WEMS_ASD01_SD1_VEN,
++	WEMS_ASD01_SD1_WP,
++	WEMS_ASD01_SD1_CD,
++
++	/* Micro SD - SD2 */
++	PB4_PF_SD2_D0,
++	PB5_PF_SD2_D1,
++	PB6_PF_SD2_D2,
++	PB7_PF_SD2_D3,
++	PB8_PF_SD2_CMD,
++	PB9_PF_SD2_CLK,
++
++	/* Audio Codec - Wolfson WMB8731LSEFL */
++	PD17_PF_I2C_DATA,
++	PD18_PF_I2C_CLK,
++	PC20_PF_SSI1_FS,
++	PC23_PF_SSI1_CLK,
++	PC21_PF_SSI1_RXD,
++	PC24_PF_SSI2_FS,
++	PC26_PF_SSI2_TXD,
++	PC27_PF_SSI2_CLK, /* Check - don't think this is needed */
++
++	/* Status LEDs 0-3 (Fault, Wireless Green, Wireless Red, Alarm) */
++	WEMS_ASD01_LED_FAULT,
++	WEMS_ASD01_LED_RF_RED,
++	WEMS_ASD01_LED_RF_GREEN,
++	WEMS_ASD01_LED_ALARM,
++
++	/* USB Host Port 1-1 (USBD) */
++	WEMS_ASD01_USB1_MODE,
++	WEMS_ASD01_USB1_SUSPEND,
++	WEMS_ASD01_USB1_FS,
++	WEMS_ASD01_USB1_OE,
++	WEMS_ASD01_USB1_TXDM,
++	WEMS_ASD01_USB1_TXDP,
++	WEMS_ASD01_USB1_RXDM,
++	WEMS_ASD01_USB1_RXDP,
++
++	/* USB Host Port 1-2 (USBH) */
++	WEMS_ASD01_USBH_MODE,
++	WEMS_ASD01_USBH_SUSPEND,
++	WEMS_ASD01_USBH_FS,
++	WEMS_ASD01_USBH_OE,
++	WEMS_ASD01_USBH_TXDM,
++	WEMS_ASD01_USBH_TXDP,
++	WEMS_ASD01_USBH_RXDM,
++	WEMS_ASD01_USBH_RXDP,
++
++	/* USB Host Port 1-3 (USBH1) */
++	WEMS_ASD01_USBH1_MODE,
++	WEMS_ASD01_USBH1_FS,
++	WEMS_ASD01_USBH1_OE,
++	WEMS_ASD01_USBH1_TXDM,
++	WEMS_ASD01_USBH1_TXDP,
++	WEMS_ASD01_USBH1_RXDM,
++	WEMS_ASD01_USBH1_RXDP,
++
++
++	/* I2C */
++	PD17_PF_I2C_DATA,
++	PD18_PF_I2C_CLK,
++	WEMS_ASD01_I2C_INT, /* I2C INT */
++
++};
++
++
++/* Ethernet: CS8900@0xd3000000 (CS5) */
++#define WEMS_ASD01_CS8900A_IRQ_GPIO		IMX_GPIO_NR(5, 2)
++
++static struct resource wems_asd01_cs8900_resources[] __initdata = {
++	DEFINE_RES_MEM(MX21_CS5_BASE_ADDR, 0x01000000),
++	DEFINE_RES_IRQ(-1),
++};
++
++static const struct platform_device_info wems_asd01_cs8900_devinfo __initconst = {
++	.name = "cs89x0",
++	.id = 0,
++	.res = wems_asd01_cs8900_resources,
++	.num_res = ARRAY_SIZE(wems_asd01_cs8900_resources),
++};
++
++
++/* NOR Flash (2x Intel JS28F128J3D 128Mbit)
++ * 0: 16M@0xc8000000 (CS0)
++ * 1: 16M@0xcc000000 (CS1)
++ */
++static struct physmap_flash_data wems_asd01_flash_data = {
++		.width = 2, /* 2 byte data width */
++};
++
++static struct resource wems_asd01_flash_resource[] = {
++		[0] = {
++			.start = MX21_CS0_BASE_ADDR,
++			.end = MX21_CS0_BASE_ADDR + SZ_16M - 1,
++			.flags = IORESOURCE_MEM,
++		},
++
++		[1] = {
++			.start = MX21_CS1_BASE_ADDR,
++			.end = MX21_CS1_BASE_ADDR + SZ_16M - 1,
++			.flags = IORESOURCE_MEM,
++		},
++};
++
++static struct platform_device wems_asd01_mtd_device = {
++		.name = "physmap-flash",
++		.id = 0,
++		.dev = {
++			.platform_data = &wems_asd01_flash_data,
++		},
++		.num_resources = 2,
++		.resource = &wems_asd01_flash_resource,
++};
++
++static struct platform_device *platform_devices[] __initdata = {
++	&wems_asd01_mtd_device,
++};
++
++
++/*
++ * UART2 and UART3 Use RS232 DTE, UART1 does not
++ */
++static const struct imxuart_platform_data uart_pdata_uart2 __initconst = {
++	.flags = IMXUART_HAVE_RTSCTS | IMXUART_HAVE_DTRDSR | IMXUART_HAVE_DCD | IMXUART_HAVE_RI | IMXUART_IS_DTE,
++	/*.gpio_rts = WEMS_ASD01_UART2_RTS,
++	.gpio_cts = WEMS_ASD01_UART2_CTS,
++	.gpio_dtr = WEMS_ASD01_UART2_DTR,
++	.gpio_dsr = WEMS_ASD01_UART2_DSR,
++	.gpio_dcd = WEMS_ASD01_UART2_DCD,
++	.gpio_ri = WEMS_ASD01_UART2_RI,*/
++	.gpio_rts = IMX_GPIO_NR(5,4),
++	.gpio_cts = IMX_GPIO_NR(5,3),
++	.gpio_dtr = IMX_GPIO_NR(2,14),
++	.gpio_dsr = IMX_GPIO_NR(2,17),
++	.gpio_dcd = IMX_GPIO_NR(2,19),
++	.gpio_ri = IMX_GPIO_NR(2,18),
++};
++
++static const struct imxuart_platform_data uart_pdata_uart3 __initconst = {
++	.flags = IMXUART_HAVE_RTSCTS | IMXUART_HAVE_DTRDSR | IMXUART_HAVE_DCD | IMXUART_HAVE_RI | IMXUART_IS_DTE,
++	/*.gpio_rts = WEMS_ASD01_UART3_RTS,
++	.gpio_cts = WEMS_ASD01_UART3_CTS,
++	.gpio_dtr = WEMS_ASD01_UART3_DTR,
++	.gpio_dsr = WEMS_ASD01_UART3_DSR,
++	.gpio_dcd = WEMS_ASD01_UART3_DCD,
++	.gpio_ri = WEMS_ASD01_UART3_RI,*/
++	.gpio_rts = IMX_GPIO_NR(5,11),
++	.gpio_cts = IMX_GPIO_NR(5,10),
++	.gpio_dtr = IMX_GPIO_NR(2,10),
++	.gpio_dsr = IMX_GPIO_NR(2,11),
++	.gpio_dcd = IMX_GPIO_NR(2,13),
++	.gpio_ri = IMX_GPIO_NR(2,12),
++};
++
++static const struct imxuart_platform_data uart_pdata_uart1 __initconst = {
++};
++
++
++/* SD Slot 1 */
++static int wems_asd01_sd1_get_ro(struct device *dev)
++{
++	return gpio_get_value(IMX_GPIO_NR(4, 26));
++}
++
++static int wems_asd01_sd1_init(struct device *dev, irq_handler_t detect_irq, void *data)
++{
++	return request_irq(gpio_to_irq(IMX_GPIO_NR(4, 25)), detect_irq,
++		IRQF_TRIGGER_FALLING, "mmc-detect", data);
++}
++
++static void wems_asd01_sd1_exit(struct device *dev, void *data)
++{
++	free_irq(gpio_to_irq(IMX_GPIO_NR(4, 25)), data);
++}
++
++static void wems_asd01_sd1_setpower(struct device *dev, unsigned int vdd)
++{
++    if (vdd) {
++    	gpio_set_value(IMX_GPIO_NR(4, 27), 1); /* Set SD_VEN high */
++    } else {
++    	gpio_set_value(IMX_GPIO_NR(4, 27), 0); /* Set SD_VEN low */
++    }
++}
++
++static const struct imxmmc_platform_data wems_asd01_sd1_pdata __initconst = {
++	.get_ro		= wems_asd01_sd1_get_ro,
++	.init		= wems_asd01_sd1_init,
++	.exit		= wems_asd01_sd1_exit,
++	.setpower	= wems_asd01_sd1_setpower,
++};
++
++/* SD Slot 2 */
++static const struct imxmmc_platform_data wems_asd01_sd2_pdata __initconst = {
++	.dat3_card_detect = 1,
++};
++
++
++/* USB */
++static const struct mx21_usbh_platform_data wems_asd01_usbh_pdata __initconst = {
++	.host_xcvr	= MX21_USBXCVR_TXDIF_RXDIF,
++	.otg_xcvr = MX21_USBXCVR_TXDIF_RXDIF,
++	.enable_host1 = 1,
++	.enable_host2 = 1,
++	.enable_otg_host = 1,
++	.host1_txenoe = 1,
++};
++
++
++/* I2C */
++static const struct imxi2c_platform_data wems_asd01_i2c_pdata __initconst = {
++	.bitrate = 100000,
++};
++
++
++/* I2C RTC */
++static struct i2c_board_info m41t00_i2c_board_info[] = {
++	{
++		I2C_BOARD_INFO("m41t00", 0x68),
++	},
++};
++
++
++/* Inititalise Function */
++static void __init wems_asd01_board_init(void)
++{
++	imx21_soc_init();
++
++	mxc_gpio_setup_multiple_pins(wems_asd01_pins, ARRAY_SIZE(wems_asd01_pins),"wems_asd01");
++
++	/* Initialise Ethernet */
++	wems_asd01_cs8900_resources[1].start	= gpio_to_irq(WEMS_ASD01_CS8900A_IRQ_GPIO);
++	wems_asd01_cs8900_resources[1].end		= gpio_to_irq(WEMS_ASD01_CS8900A_IRQ_GPIO);
++	platform_device_register_full(&wems_asd01_cs8900_devinfo);
++
++	/* Initialise UARTs */
++	imx21_add_imx_uart0(&uart_pdata_uart1);
++	imx21_add_imx_uart1(&uart_pdata_uart2);
++	imx21_add_imx_uart2(&uart_pdata_uart3);
++
++	/* MMC Power Off */
++	gpio_set_value(IMX_GPIO_NR(4, 27), 0);
++	/* Initialise MMC */
++	imx21_add_mxc_mmc(0,&wems_asd01_sd1_pdata);
++	/*imx21_add_mxc_mmc(1,&wems_asd01_sd2_pdata);*/
++
++	/* Test - Set Host xcvr intodiff mode */
++	gpio_set_value(IMX_GPIO_NR(3, 6),1);
++	gpio_set_value(IMX_GPIO_NR(2, 22),1);
++	gpio_set_value(IMX_GPIO_NR(2, 21),1);
++
++	/* Initialise USB */
++	imx21_add_imx21_hcd(&wems_asd01_usbh_pdata);
++
++	/* Initialise I2C */
++	imx21_add_imx_i2c(&wems_asd01_i2c_pdata);
++
++	/* Initialise RTC */
++	i2c_register_board_info(0, m41t00_i2c_board_info, ARRAY_SIZE(m41t00_i2c_board_info));
++
++	/* Initialise Watchdog */
++	imx21_add_imx2_wdt();
++
++	platform_add_devices(platform_devices, ARRAY_SIZE(platform_devices));
++}
++
++static void __init wems_asd01_timer_init(void)
++{
++	mx21_clocks_init(32768, 26000000);
++}
++
++static struct sys_timer wems_asd01_timer = {
++	.init	= wems_asd01_timer_init,
++};
++
++MACHINE_START(WEMS_ASD01, "ASD01 WEMSprogrammer")
++	.atag_offset = 0x100,
++	.map_io = mx21_map_io,
++	.init_early = imx21_init_early,
++	.init_irq = mx21_init_irq,
++	.handle_irq = imx21_handle_irq,
++	.timer = &wems_asd01_timer,
++	.init_machine = wems_asd01_board_init,
++	.restart	= mxc_restart,
++MACHINE_END
+diff --git a/arch/arm/plat-mxc/include/mach/mx21.h b/arch/arm/plat-mxc/include/mach/mx21.h
+index 468738a..519e781 100644
+--- a/arch/arm/plat-mxc/include/mach/mx21.h
++++ b/arch/arm/plat-mxc/include/mach/mx21.h
+@@ -82,7 +82,7 @@
+ #define MX21_CS3_BASE_ADDR		0xd1000000
+ #define MX21_CS4_BASE_ADDR		0xd2000000
+ #define MX21_PCMCIA_MEM_BASE_ADDR	0xd4000000
+-#define MX21_CS5_BASE_ADDR		0xdd000000
++#define MX21_CS5_BASE_ADDR		0xd3000000
+ 
+ /* NAND, SDRAM, WEIM etc controllers */
+ #define MX21_X_MEMC_BASE_ADDR		0xdf000000
+diff --git a/arch/arm/tools/mach-types b/arch/arm/tools/mach-types
+index 831e1fd..edb231e 100644
+--- a/arch/arm/tools/mach-types
++++ b/arch/arm/tools/mach-types
+@@ -1204,3 +1204,4 @@ baileys			MACH_BAILEYS		BAILEYS			4169
+ familybox		MACH_FAMILYBOX		FAMILYBOX		4170
+ ensemble_mx35		MACH_ENSEMBLE_MX35	ENSEMBLE_MX35		4171
+ sc_sps_1		MACH_SC_SPS_1		SC_SPS_1		4172
++wems_asd01		MACH_WEMS_ASD01		WEMS_ASD01		4512
+diff --git a/drivers/mmc/host/mxcmmc.c b/drivers/mmc/host/mxcmmc.c
+index 6290b7f..b94eaaa 100644
+--- a/drivers/mmc/host/mxcmmc.c
++++ b/drivers/mmc/host/mxcmmc.c
+@@ -58,6 +58,8 @@
+ #define MMC_REG_INT_CNTR		0x24
+ #define MMC_REG_CMD			0x28
+ #define MMC_REG_ARG			0x2C
++#define MMC_REG_ARGH			0x2C
++#define MMC_REG_ARGL			0x30
+ #define MMC_REG_RES_FIFO		0x34
+ #define MMC_REG_BUFFER_ACCESS		0x38
+ 
+@@ -157,6 +159,49 @@ struct mxcmci_host {
+ 
+ static void mxcmci_set_clk_rate(struct mxcmci_host *host, unsigned int clk_ios);
+ 
++static void mxcmci_write_arg(struct mxcmci_host *host, u32 arg)
++{
++	if (cpu_is_mx21()) {
++		writel(arg >> 16, host->base + MMC_REG_ARGH);
++		writel(arg & 0xFFFF, host->base + MMC_REG_ARGL);
++	} else {
++		writel(arg, host->base + MMC_REG_ARG);
++	}
++}
++
++static void mxcmci_ack_int(struct mxcmci_host *host, u32 stat)
++{
++	if (cpu_is_mx21()) {
++		u32 intclr = readl(host->base + MMC_REG_INT_CNTR);
++
++		if (stat & STATUS_DATA_TRANS_DONE)
++			intclr |= INT_READ_OP_EN;
++		if (stat & STATUS_WRITE_OP_DONE)
++			intclr |= INT_WRITE_OP_DONE_EN;
++		if (stat & STATUS_END_CMD_RESP)
++			intclr |= INT_END_CMD_RES_EN;
++
++		writel(intclr, host->base + MMC_REG_INT_CNTR);
++	}
++}
++
++static inline void mxcmci_set_int_cntr(struct mxcmci_host *host, u32 enables)
++{
++	if (cpu_is_mx21()) /* some interrupt enables have reverse polarity */
++		enables ^=  0x1F;
++	writel(enables, host->base + MMC_REG_INT_CNTR);
++}
++
++static inline void mxcmci_start_clock(struct mxcmci_host *host)
++{
++	writew(STR_STP_CLK_START_CLK, host->base + MMC_REG_STR_STP_CLK);
++}
++
++static inline void mxcmci_stop_clock(struct mxcmci_host *host)
++{
++	writew(STR_STP_CLK_STOP_CLK, host->base + MMC_REG_STR_STP_CLK);
++}
++
+ static inline void mxcmci_init_ocr(struct mxcmci_host *host)
+ {
+ 	host->vcc = regulator_get(mmc_dev(host->mmc), "vmmc");
+@@ -271,10 +316,13 @@ static int mxcmci_setup_data(struct mxcmci_host *host, struct mmc_data *data)
+ 	}
+ 	wmb();
+ 
+-	dmaengine_submit(host->desc);
+-	dma_async_issue_pending(host->dma);
+-
+-	mod_timer(&host->watchdog, jiffies + msecs_to_jiffies(MXCMCI_TIMEOUT_MS));
++	/* MX21: unreliable writes if dma enabled here - do on command done */
++	if (mxcmci_use_dma(host) &&
++			(!cpu_is_mx21() || host->dma_dir == DMA_FROM_DEVICE)) {
++		dmaengine_submit(host->desc);
++		dma_async_issue_pending(host->dma);
++		mod_timer(&host->watchdog, jiffies + msecs_to_jiffies(MXCMCI_TIMEOUT_MS));
++	}
+ 
+ 	return 0;
+ }
+@@ -343,13 +391,17 @@ static int mxcmci_start_cmd(struct mxcmci_host *host, struct mmc_command *cmd,
+ 	spin_lock_irqsave(&host->lock, flags);
+ 	if (host->use_sdio)
+ 		int_cntr |= INT_SDIO_IRQ_EN;
+-	writel(int_cntr, host->base + MMC_REG_INT_CNTR);
++	mxcmci_set_int_cntr(host, int_cntr);
+ 	spin_unlock_irqrestore(&host->lock, flags);
+ 
+ 	writew(cmd->opcode, host->base + MMC_REG_CMD);
+-	writel(cmd->arg, host->base + MMC_REG_ARG);
++	mxcmci_write_arg(host, cmd->arg);
+ 	writew(cmdat, host->base + MMC_REG_CMD_DAT_CONT);
+ 
++	if (cpu_is_mx21()) {
++		/* i.MX21 requires clock start after submitting command */
++		mxcmci_start_clock(host);
++	}
+ 	return 0;
+ }
+ 
+@@ -362,7 +414,7 @@ static void mxcmci_finish_request(struct mxcmci_host *host,
+ 	spin_lock_irqsave(&host->lock, flags);
+ 	if (host->use_sdio)
+ 		int_cntr |= INT_SDIO_IRQ_EN;
+-	writel(int_cntr, host->base + MMC_REG_INT_CNTR);
++	mxcmci_set_int_cntr(host, int_cntr);
+ 	spin_unlock_irqrestore(&host->lock, flags);
+ 
+ 	host->req = NULL;
+@@ -473,19 +525,29 @@ static int mxcmci_poll_status(struct mxcmci_host *host, u32 mask)
+ static int mxcmci_pull(struct mxcmci_host *host, void *_buf, int bytes)
+ {
+ 	unsigned int stat;
+-	u32 *buf = _buf;
+-
+-	while (bytes > 3) {
+-		stat = mxcmci_poll_status(host,
++	u16 *buf16 = _buf;
++	u32 *buf32 = _buf;
++	int count = 0;
++	int fifo_size = host->cmdat & CMD_DAT_CONT_BUS_WIDTH_4 ? 64 : 16;
++	int buffer_width = cpu_is_mx21() ? 2 : 4;
++
++	while (bytes >= buffer_width) {
++		if (count % fifo_size == 0) {
++			stat = mxcmci_poll_status(host,
+ 				STATUS_BUF_READ_RDY | STATUS_READ_OP_DONE);
+-		if (stat)
+-			return stat;
+-		*buf++ = readl(host->base + MMC_REG_BUFFER_ACCESS);
+-		bytes -= 4;
++			if (stat)
++				return stat;
++		}
++		if (buffer_width == 2)
++			*buf16++ = (u16)readl(
++				host->base + MMC_REG_BUFFER_ACCESS);
++		else
++			*buf32++ = readl(host->base + MMC_REG_BUFFER_ACCESS);
++		bytes -= buffer_width;
++		count += buffer_width;
+ 	}
+ 
+ 	if (bytes) {
+-		u8 *b = (u8 *)buf;
+ 		u32 tmp;
+ 
+ 		stat = mxcmci_poll_status(host,
+@@ -493,7 +555,10 @@ static int mxcmci_pull(struct mxcmci_host *host, void *_buf, int bytes)
+ 		if (stat)
+ 			return stat;
+ 		tmp = readl(host->base + MMC_REG_BUFFER_ACCESS);
+-		memcpy(b, &tmp, bytes);
++		if (buffer_width == 2)
++			memcpy((u8 *)buf16, &tmp, bytes);
++		else
++			memcpy((u8 *)buf32, &tmp, bytes);
+ 	}
+ 
+ 	return 0;
+@@ -502,33 +567,40 @@ static int mxcmci_pull(struct mxcmci_host *host, void *_buf, int bytes)
+ static int mxcmci_push(struct mxcmci_host *host, void *_buf, int bytes)
+ {
+ 	unsigned int stat;
+-	u32 *buf = _buf;
+-
+-	while (bytes > 3) {
+-		stat = mxcmci_poll_status(host, STATUS_BUF_WRITE_RDY);
+-		if (stat)
+-			return stat;
+-		writel(*buf++, host->base + MMC_REG_BUFFER_ACCESS);
+-		bytes -= 4;
++	u16 *buf16 = _buf;
++	u32 *buf32 = _buf;
++	int count = 0;
++	int fifo_size = host->cmdat & CMD_DAT_CONT_BUS_WIDTH_4 ? 64 : 16;
++	int buffer_width = cpu_is_mx21() ? 2 : 4;
++
++	while (bytes >= buffer_width) {
++		if (count % fifo_size == 0) {
++			stat = mxcmci_poll_status(host, STATUS_BUF_WRITE_RDY);
++			if (stat)
++				return stat;
++		}
++		if (buffer_width == 2)
++			writel(*buf16++, host->base + MMC_REG_BUFFER_ACCESS);
++		else
++			writel(*buf32++, host->base + MMC_REG_BUFFER_ACCESS);
++		bytes -= buffer_width;
++		count += buffer_width;
+ 	}
+ 
+ 	if (bytes) {
+-		u8 *b = (u8 *)buf;
+ 		u32 tmp;
+ 
+ 		stat = mxcmci_poll_status(host, STATUS_BUF_WRITE_RDY);
+ 		if (stat)
+ 			return stat;
+-
+-		memcpy(&tmp, b, bytes);
++		if (buffer_width == 2)
++			memcpy(&tmp, (u8 *)buf16, bytes);
++		else
++			memcpy(&tmp, (u8 *)buf32, bytes);
+ 		writel(tmp, host->base + MMC_REG_BUFFER_ACCESS);
+ 	}
+ 
+-	stat = mxcmci_poll_status(host, STATUS_BUF_WRITE_RDY);
+-	if (stat)
+-		return stat;
+-
+-	return 0;
++	return mxcmci_poll_status(host, STATUS_BUF_WRITE_RDY);
+ }
+ 
+ static int mxcmci_transfer_data(struct mxcmci_host *host)
+@@ -567,6 +639,12 @@ static void mxcmci_datawork(struct work_struct *work)
+ 						  datawork);
+ 	int datastat = mxcmci_transfer_data(host);
+ 
++	/* Unsure why but iMX21 likes to delay here or we get kernel
++	 * task hang timeout waiting for response
++	 */
++	if (cpu_is_mx21())
++		udelay(100);
++
+ 	writel(STATUS_READ_OP_DONE | STATUS_WRITE_OP_DONE,
+ 		host->base + MMC_REG_STATUS);
+ 	mxcmci_finish_data(host, datastat);
+@@ -613,12 +691,19 @@ static void mxcmci_cmd_done(struct mxcmci_host *host, unsigned int stat)
+ 		mxcmci_finish_request(host, host->req);
+ 		return;
+ 	}
++	if (!host->data)
++		return;
+ 
++#ifdef HAS_DMA
+ 	/* For the DMA case the DMA engine handles the data transfer
+ 	 * automatically. For non DMA we have to do it ourselves.
+ 	 * Don't do it in interrupt context though.
+ 	 */
+-	if (!mxcmci_use_dma(host) && host->data)
++	if (mxcmci_use_dma(host)) {
++		if (cpu_is_mx21() && host->dma_dir == DMA_TO_DEVICE)
++			imx_dma_enable(host->dma);
++	} else
++#endif
+ 		schedule_work(&host->datawork);
+ 
+ }
+@@ -633,6 +718,7 @@ static irqreturn_t mxcmci_irq(int irq, void *devid)
+ 	stat = readl(host->base + MMC_REG_STATUS);
+ 	writel(stat & ~(STATUS_SDIO_INT_ACTIVE | STATUS_DATA_TRANS_DONE |
+ 			STATUS_WRITE_OP_DONE), host->base + MMC_REG_STATUS);
++	mxcmci_ack_int(host, stat);
+ 
+ 	dev_dbg(mmc_dev(host->mmc), "%s: 0x%08x\n", __func__, stat);
+ 
+@@ -791,9 +877,9 @@ static void mxcmci_set_ios(struct mmc_host *mmc, struct mmc_ios *ios)
+ 
+ 	if (ios->clock) {
+ 		mxcmci_set_clk_rate(host, ios->clock);
+-		writew(STR_STP_CLK_START_CLK, host->base + MMC_REG_STR_STP_CLK);
++		mxcmci_start_clock(host);
+ 	} else {
+-		writew(STR_STP_CLK_STOP_CLK, host->base + MMC_REG_STR_STP_CLK);
++		mxcmci_stop_clock(host);
+ 	}
+ 
+ 	host->clock = ios->clock;
+@@ -953,8 +1039,10 @@ static int mxcmci_probe(struct platform_device *pdev)
+ 	mxcmci_init_ocr(host);
+ 
+ 	if (host->pdata && host->pdata->dat3_card_detect)
+-		host->default_irq_mask =
+-			INT_CARD_INSERTION_EN | INT_CARD_REMOVAL_EN;
++		if (cpu_is_mx21())
++			host->default_irq_mask = INT_CARD_INSERTION_EN;
++		else
++			host->default_irq_mask = INT_CARD_INSERTION_EN | INT_CARD_REMOVAL_EN;
+ 	else
+ 		host->default_irq_mask = 0;
+ 
+@@ -992,7 +1080,7 @@ static int mxcmci_probe(struct platform_device *pdev)
+ 	/* recommended in data sheet */
+ 	writew(0x2db4, host->base + MMC_REG_READ_TO);
+ 
+-	writel(host->default_irq_mask, host->base + MMC_REG_INT_CNTR);
++	mxcmci_set_int_cntr(host, host->default_irq_mask);
+ 
+ 	r = platform_get_resource(pdev, IORESOURCE_DMA, 0);
+ 	if (r) {
+diff --git a/drivers/net/ethernet/cirrus/cs89x0.c b/drivers/net/ethernet/cirrus/cs89x0.c
+index 1384469..31ba7f9 100644
+--- a/drivers/net/ethernet/cirrus/cs89x0.c
++++ b/drivers/net/ethernet/cirrus/cs89x0.c
+@@ -1500,6 +1500,24 @@ cs89x0_probe1(struct net_device *dev, void __iomem *ioaddr, int modular)
+ 		    (EEPROM_OK | EEPROM_PRESENT))
+ 			pr_warn("Extended EEPROM checksum bad and no Cirrus EEPROM, relying on command line\n");
+ 
++#ifdef CONFIG_MACH_WEMS_ASD01
++			/* Add machine specific configuration for WEMS ASD01 */
++			pr_warn("ASD01 MAC already set by bootloader, reading back into eth device...\n");
++			for (i = 0; i < ETH_ALEN; i+=2) {
++			    u16 val;
++			    val = readreg(dev, PP_IA+i);
++			    dev->dev_addr[i] = val & 0xff;
++			    dev->dev_addr[i+1] = (val >> 8) & 0xff;
++			}
++			pr_warn("ASD01 set media type to RJ45...\n");
++			lp->adapter_cnf |=  A_CNF_10B_T | A_CNF_MEDIA_10B_T;
++			pr_warn("ASD01 set half duplex...\n");
++			lp->force |= FORCE_HALF;
++			pr_warn("ASD01 set extended range...\n");
++			lp->adapter_cnf |= A_CNF_EXTND_10B_2 | A_CNF_LOW_RX_SQUELCH;
++			pr_warn("ASD01 ignore missing cable...\n");
++			lp->auto_neg_cnf |= IMM_BIT;
++#endif
+ 	} else {
+ 		/* This reads an extended EEPROM that is not documented
+ 		 * in the CS8900 datasheet.
+diff --git a/drivers/net/ethernet/cirrus/cs89x0.h b/drivers/net/ethernet/cirrus/cs89x0.h
+index 91423b7..9380f62 100644
+--- a/drivers/net/ethernet/cirrus/cs89x0.h
++++ b/drivers/net/ethernet/cirrus/cs89x0.h
+@@ -324,16 +324,28 @@
+ #define RAM_SIZE	0x1000       /*  The card has 4k bytes or RAM */
+ #define PKT_START PP_TxFrame  /*  Start of packet RAM */
+ 
++#ifdef CONFIG_MACH_WEMS_ASD01
++/* ASD01 uses A1-A4 instead of expected A0-A3
++ * so we need to shift the port addresses
++ */
++#define RX_FRAME_PORT	0x0000 * 0x02
++#define TX_CMD_PORT		0x0004 * 0x02
++#define TX_LEN_PORT		0x0006 * 0x02
++#define ISQ_PORT		0x0008 * 0x02
++#define ADD_PORT		0x000A * 0x02
++#define DATA_PORT		0x000C * 0x02
++#else
+ #define RX_FRAME_PORT	0x0000
+-#define TX_FRAME_PORT RX_FRAME_PORT
+ #define TX_CMD_PORT	0x0004
+-#define TX_NOW		0x0000       /*  Tx packet after   5 bytes copied */
+-#define TX_AFTER_381	0x0040       /*  Tx packet after 381 bytes copied */
+-#define TX_AFTER_ALL	0x00c0       /*  Tx packet after all bytes copied */
+ #define TX_LEN_PORT	0x0006
+ #define ISQ_PORT	0x0008
+ #define ADD_PORT	0x000A
+ #define DATA_PORT	0x000C
++#endif /* CONFIG_MACH_ASD01_WEMS */
++#define TX_FRAME_PORT RX_FRAME_PORT
++#define TX_NOW		0x0000       /*  Tx packet after   5 bytes copied */
++#define TX_AFTER_381	0x0040       /*  Tx packet after 381 bytes copied */
++#define TX_AFTER_ALL	0x00c0       /*  Tx packet after all bytes copied */
+ 
+ #define EEPROM_WRITE_EN		0x00F0
+ #define EEPROM_WRITE_DIS	0x0000
+diff --git a/drivers/tty/serial/imx.c b/drivers/tty/serial/imx.c
+index 5c110c8..05362ca 100644
+--- a/drivers/tty/serial/imx.c
++++ b/drivers/tty/serial/imx.c
+@@ -9,6 +9,9 @@
+  *  Copyright (C) 2009 emlix GmbH
+  *  Author: Fabian Godehardt (added IrDA support for iMX)
+  *
++ * Copyright (c) 2013 Wireless Energy Management Systems International Ltd.
++ * Author: Guy Thouret <guythouret@wems.co.uk> (added RS232 DTE Signalling)
++ *
+  * This program is free software; you can redistribute it and/or modify
+  * it under the terms of the GNU General Public License as published by
+  * the Free Software Foundation; either version 2 of the License, or
+@@ -52,6 +55,8 @@
+ #include <asm/io.h>
+ #include <asm/irq.h>
+ #include <linux/platform_data/serial-imx.h>
++#include <mach/iomux-v1.h>
++#include <linux/gpio.h>
+ 
+ /* Register definitions */
+ #define URXD0 0x0  /* Receiver Register */
+@@ -205,9 +210,19 @@ struct imx_port {
+ 	unsigned int		irda_inv_rx:1;
+ 	unsigned int		irda_inv_tx:1;
+ 	unsigned short		trcv_delay; /* transceiver delay */
++	unsigned int		have_dtrdsr:1;
++	unsigned int		have_dcd:1;
++	unsigned int		have_ri:1;
++	unsigned int		is_dte:1;
+ 	struct clk		*clk_ipg;
+ 	struct clk		*clk_per;
+ 	const struct imx_uart_data *devdata;
++	int dtr;
++	int dsr;
++	int ri;
++	int dcd;
++	int cts;
++	int rts;
+ };
+ 
+ struct imx_port_ucrs {
+@@ -602,6 +617,58 @@ static irqreturn_t imx_int(int irq, void *dev_id)
+ 	return IRQ_HANDLED;
+ }
+ 
++static int imx_get_dcd(struct imx_port *port)
++{
++	int res = 0;
++	if (port->dcd) {
++		res = gpio_get_value(port->dcd) ? 0 : 1;
++	}
++	return res;
++}
++
++static int imx_get_dsr(struct imx_port *port)
++{
++	int res = 0;
++	if (port->dsr) {
++		res = gpio_get_value(port->dsr) ? 0 : 1;
++	}
++	return res;
++}
++
++static int imx_get_ri(struct imx_port *port)
++{
++	int res = 0;
++	if (port->ri) {
++		res = gpio_get_value(port->ri) ? 0 : 1;
++	}
++	return res;
++}
++
++static int imx_get_cts(struct imx_port *port)
++{
++	int res = 0;
++	if (port->cts) {
++		res = gpio_get_value(port->cts) ? 0 : 1;
++	}
++	return res;
++}
++
++static void imx_set_dtr(struct imx_port *port, int val)
++{
++	if (port->dtr) {
++		val = val ? 0 : 1;
++		gpio_set_value(port->dtr, val);
++	}
++}
++
++static void imx_set_rts(struct imx_port *port, int val)
++{
++	if (port->rts) {
++		val = val ? 0 : 1;
++		gpio_set_value(port->rts, val);
++	}
++}
++
+ /*
+  * Return TIOCSER_TEMT when transmitter is not busy.
+  */
+@@ -618,13 +685,38 @@ static unsigned int imx_tx_empty(struct uart_port *port)
+ static unsigned int imx_get_mctrl(struct uart_port *port)
+ {
+ 	struct imx_port *sport = (struct imx_port *)port;
+-	unsigned int tmp = TIOCM_DSR | TIOCM_CAR;
+ 
+-	if (readl(sport->port.membase + USR1) & USR1_RTSS)
+-		tmp |= TIOCM_CTS;
++	unsigned int tmp = 0;
++
++	if (sport->is_dte) {
++		if (sport->have_dcd) {
++			if (imx_get_dcd(sport))
++				tmp |= TIOCM_CD;
++		}
++
++		if (sport->have_rtscts) {
++			if (imx_get_cts(sport))
++				tmp |= TIOCM_CTS;
++		}
++
++		if (sport->have_ri) {
++			if (imx_get_ri(sport))
++				tmp |= TIOCM_RI;
++		}
++
++		if (sport->have_dtrdsr) {
++			if (imx_get_dsr(sport))
++				tmp |= TIOCM_DSR;
++		}
++	} else {
++		unsigned int tmp = TIOCM_DSR | TIOCM_CAR;
+ 
+-	if (readl(sport->port.membase + UCR2) & UCR2_CTS)
+-		tmp |= TIOCM_RTS;
++		if (readl(sport->port.membase + USR1) & USR1_RTSS)
++			tmp |= TIOCM_CTS;
++
++		if (readl(sport->port.membase + UCR2) & UCR2_CTS)
++			tmp |= TIOCM_RTS;
++	}
+ 
+ 	return tmp;
+ }
+@@ -632,14 +724,30 @@ static unsigned int imx_get_mctrl(struct uart_port *port)
+ static void imx_set_mctrl(struct uart_port *port, unsigned int mctrl)
+ {
+ 	struct imx_port *sport = (struct imx_port *)port;
+-	unsigned long temp;
++	if (sport->is_dte) {
++		if (sport->have_rtscts) {
++			if (mctrl & TIOCM_RTS)
++				imx_set_rts(sport, 1);
++			else
++				imx_set_rts(sport, 0);
++		}
++
++		if (sport->have_dtrdsr) {
++			if (mctrl & TIOCM_DTR)
++				imx_set_dtr(sport, 1);
++			else
++				imx_set_dtr(sport, 0);
++		}
++	} else {
++		unsigned long temp;
+ 
+-	temp = readl(sport->port.membase + UCR2) & ~UCR2_CTS;
++		temp = readl(sport->port.membase + UCR2) & ~UCR2_CTS;
+ 
+-	if (mctrl & TIOCM_RTS)
+-		temp |= UCR2_CTS;
++		if (mctrl & TIOCM_RTS)
++			temp |= UCR2_CTS;
+ 
+-	writel(temp, sport->port.membase + UCR2);
++		writel(temp, sport->port.membase + UCR2);
++	}
+ }
+ 
+ /*
+@@ -801,9 +909,10 @@ static int imx_startup(struct uart_port *port)
+ 	imx_enable_ms(&sport->port);
+ 	spin_unlock_irqrestore(&sport->port.lock,flags);
+ 
++	struct imxuart_platform_data *pdata;
++	pdata = sport->port.dev->platform_data;
++
+ 	if (USE_IRDA(sport)) {
+-		struct imxuart_platform_data *pdata;
+-		pdata = sport->port.dev->platform_data;
+ 		sport->irda_inv_rx = pdata->irda_inv_rx;
+ 		sport->irda_inv_tx = pdata->irda_inv_tx;
+ 		sport->trcv_delay = pdata->transceiver_delay;
+@@ -811,6 +920,11 @@ static int imx_startup(struct uart_port *port)
+ 			pdata->irda_enable(1);
+ 	}
+ 
++
++	if (flags & (IMXUART_IS_DTE | IMXUART_HAVE_DTRDSR)) {
++		imx_set_dtr(sport, 1);
++	}
++
+ 	return 0;
+ 
+ error_out3:
+@@ -870,6 +984,10 @@ static void imx_shutdown(struct uart_port *port)
+ 
+ 	writel(temp, sport->port.membase + UCR1);
+ 	spin_unlock_irqrestore(&sport->port.lock, flags);
++
++	if (flags & (IMXUART_IS_DTE | IMXUART_HAVE_DTRDSR)) {
++		imx_set_dtr(sport, 0);
++	}
+ }
+ 
+ static void
+@@ -1458,6 +1576,30 @@ static void serial_imx_probe_pdata(struct imx_port *sport,
+ 
+ 	if (pdata->flags & IMXUART_IRDA)
+ 		sport->use_irda = 1;
++
++	if (pdata->flags & IMXUART_IS_DTE)
++		sport->is_dte = 1;
++
++	if (pdata->flags & (IMXUART_IS_DTE | IMXUART_HAVE_DTRDSR)) {
++		sport->have_dtrdsr = 1;
++		sport->dtr = pdata->gpio_dtr;
++		sport->dsr = pdata->gpio_dsr;
++	}
++
++	if (pdata->flags & (IMXUART_IS_DTE |IMXUART_HAVE_DCD)) {
++		sport->have_dcd = 1;
++		sport->dcd = pdata->gpio_dcd;
++	}
++
++	if (pdata->flags & IMXUART_HAVE_RI) {
++		sport->have_ri = 1;
++		sport->ri = pdata->gpio_ri;
++	}
++
++	if (pdata->flags & (IMXUART_IS_DTE | IMXUART_HAVE_RTSCTS)) {
++		sport->rts = pdata->gpio_rts;
++		sport->cts = pdata->gpio_cts;
++	}
+ }
+ 
+ static int serial_imx_probe(struct platform_device *pdev)
+diff --git a/drivers/usb/host/imx21-hcd.c b/drivers/usb/host/imx21-hcd.c
+index f19e269..e905578 100644
+--- a/drivers/usb/host/imx21-hcd.c
++++ b/drivers/usb/host/imx21-hcd.c
+@@ -58,6 +58,7 @@
+ #include <linux/usb.h>
+ #include <linux/usb/hcd.h>
+ #include <linux/dma-mapping.h>
++#include <linux/module.h>
+ 
+ #include "imx21-hcd.h"
+ 
+@@ -1827,6 +1828,7 @@ static int imx21_probe(struct platform_device *pdev)
+ 	struct usb_hcd *hcd;
+ 	struct imx21 *imx21;
+ 	struct resource *res;
++	struct clk *perclk;
+ 	int ret;
+ 	int irq;
+ 
+@@ -1873,17 +1875,40 @@ static int imx21_probe(struct platform_device *pdev)
+ 		goto failed_ioremap;
+ 	}
+ 
+-	/* Enable clocks source */
+-	imx21->clk = clk_get(imx21->dev, NULL);
++	/* Enable OTG Clock 'per' */
++	perclk = clk_get(imx21->dev, "per");
++	if (IS_ERR(perclk)) {
++		dev_err(imx21->dev, "no per clock found\n");
++		ret = PTR_ERR(perclk);
++		goto failed_clock_get;
++	}
++
++	/* Disable calls to clk_set_rate - this messes with the
++	 * system bus speed and is already set to 48M by bootloader
++	 */
++	/*ret = clk_set_rate(perclk, clk_round_rate(perclk, 48000000));
++	if (ret)
++		goto failed_clock_set;*/
++
++	ret = clk_prepare_enable(perclk);
++	if (ret)
++		goto failed_clock_enable;
++
++	/* Enable clocks source 'ahb' */
++	imx21->clk = clk_get(imx21->dev, "ahb");
+ 	if (IS_ERR(imx21->clk)) {
+ 		dev_err(imx21->dev, "no clock found\n");
+ 		ret = PTR_ERR(imx21->clk);
+ 		goto failed_clock_get;
+ 	}
+ 
+-	ret = clk_set_rate(imx21->clk, clk_round_rate(imx21->clk, 48000000));
++	/* Disable calls to clk_set_rate - this messes with the
++	 * system bus speed and is already set to 48M by bootloader
++	 */
++	/*ret = clk_set_rate(imx21->clk, clk_round_rate(imx21->clk, 48000000));
+ 	if (ret)
+-		goto failed_clock_set;
++		goto failed_clock_set;*/
++
+ 	ret = clk_prepare_enable(imx21->clk);
+ 	if (ret)
+ 		goto failed_clock_enable;
+diff --git a/include/linux/platform_data/serial-imx.h b/include/linux/platform_data/serial-imx.h
+index 4adec9b..de77dc0 100644
+--- a/include/linux/platform_data/serial-imx.h
++++ b/include/linux/platform_data/serial-imx.h
+@@ -1,6 +1,9 @@
+ /*
+  * Copyright (C) 2008 by Sascha Hauer <kernel@pengutronix.de>
+  *
++ * Copyright (c) 2013 Wireless Energy Management Systems International Ltd.
++ * Author: Guy Thouret <guythouret@wems.co.uk> (added RS232 DTE Signalling)
++ *
+  * This program is free software; you can redistribute it and/or
+  * modify it under the terms of the GNU General Public License
+  * as published by the Free Software Foundation; either version 2
+@@ -21,6 +24,10 @@
+ 
+ #define IMXUART_HAVE_RTSCTS (1<<0)
+ #define IMXUART_IRDA        (1<<1)
++#define IMXUART_HAVE_DTRDSR (1<<2)
++#define IMXUART_HAVE_DCD	(1<<3)
++#define IMXUART_HAVE_RI		(1<<4)
++#define IMXUART_IS_DTE		(1<<5)
+ 
+ struct imxuart_platform_data {
+ 	int (*init)(struct platform_device *pdev);
+@@ -30,6 +37,12 @@ struct imxuart_platform_data {
+ 	unsigned int irda_inv_rx:1;
+ 	unsigned int irda_inv_tx:1;
+ 	unsigned short transceiver_delay;
++	int	gpio_dtr;
++	int gpio_dsr;
++	int gpio_ri;
++	int gpio_dcd;
++	int gpio_rts;
++	int gpio_cts;
+ };
+ 
+ #endif
